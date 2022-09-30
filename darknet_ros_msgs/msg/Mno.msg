@@ -1,0 +1,4 @@
+std_msgs/Header header
+BoundingBoxes bounding_boxes
+bool is_detected
+sensor_msgs/Image image
