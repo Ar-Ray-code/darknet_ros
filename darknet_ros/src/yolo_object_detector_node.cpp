@@ -12,10 +12,12 @@
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
 
+  // YoloObjectDetectorの変数のメモリ動的確保 make_shared
   auto yoloObjectDetector = std::make_shared<darknet_ros::YoloObjectDetector>();
 
   yoloObjectDetector->init();
   
+  // 処理まち、サブスクライブしてトピックが来たら処理する
   rclcpp::spin(yoloObjectDetector->get_node_base_interface());
 
   rclcpp::shutdown();

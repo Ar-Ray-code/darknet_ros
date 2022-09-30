@@ -25,27 +25,31 @@ char *weights;
 char *data;
 char **detectionNames;
 
+// コンストラクタ
 YoloObjectDetector::YoloObjectDetector()
-    : Node("darknet_ros"),
-      numClasses_(0),
-      classLabels_(0),
-      rosBoxes_(0),
-      rosBoxCounter_(0),
-      action_active_(false),
-      preempt_requested_(false)
+  // メンバ変数初期化
+  : Node("darknet_ros"), // Nodeのコンストラクタを呼び出し、ノード名を指定
+    numClasses_(0),
+    classLabels_(0),
+    rosBoxes_(0),
+    rosBoxCounter_(0),
+    action_active_(false),
+    preempt_requested_(false)
 {
+  // ログ出力
   RCLCPP_INFO(get_logger(), "[YoloObjectDetector] Node started.");
 
+  // パラメータ宣言して初期化
   declare_parameter("image_view.enable_opencv", true);
   declare_parameter("image_view.wait_key_delay", 3);
   declare_parameter("image_view.enable_console_output", false);
-  declare_parameter("yolo_model.detection_classes.names", std::vector<std::string>(0));
+  declare_parameter("yolo_model.detection_classes.names", std::vector<std::string>(0));// 認識するもののラベル(.yaml参照)、今回はtraffic light
 
-  declare_parameter("yolo_model.threshold.value", 0.3f);
-  declare_parameter("yolo_model.weight_file.name", std::string("yolov2-tiny.weights"));
+  declare_parameter("yolo_model.threshold.value", 0.3f); // threshold value=閾値
+  declare_parameter("yolo_model.weight_file.name", std::string("pede_yolo_oneclass.weights"));
   declare_parameter("weights_path", std::string("/default"));
 
-  declare_parameter("yolo_model.config_file.name", std::string("yolov2-tiny.cfg"));
+  declare_parameter("yolo_model.config_file.name", std::string("pede_yolo_oneclass.cfg"));
   declare_parameter("config_path", std::string("/default"));
 
   declare_parameter("subscribers.camera_reading.topic", std::string("/camera/image_raw"));
@@ -53,26 +57,30 @@ YoloObjectDetector::YoloObjectDetector()
   declare_parameter("publishers.object_detector.topic", std::string("found_object"));
   declare_parameter("publishers.object_detector.queue_size", 1);
   declare_parameter("publishers.object_detector.latch", false);
+
+  //バウンディングボックス：画像のあるところを切り抜いた長方形、左上が原点でy軸が下向き、x軸が右向き
   declare_parameter("publishers.bounding_boxes.topic", std::string("bounding_boxes"));
   declare_parameter("publishers.bounding_boxes.queue_size", 1);
   declare_parameter("publishers.bounding_boxes.latch", false);
   declare_parameter("publishers.detection_image.topic", std::string("detection_image"));
-  declare_parameter("publishers.detection_image.queue_size", 1);
-  declare_parameter("publishers.detection_image.latch", true);
+  declare_parameter("publishers.detection_image.queue_size", 1); //publisher と subscriber 間でやり取りするトピックを記録しているキューのサイズ
+  declare_parameter("publishers.detection_image.latch", true);// publisherとsubscriberのコネクションが確立する前に送ったトピックを記録しておくフラグ
   declare_parameter("yolo_model.window_name", std::string("YOLO"));
 
   declare_parameter("actions.camera_reading.topic", std::string("check_for_objects"));
 }
 
+// ディストラクタ、mutexをunlockしてnodeが死んだことにする
 YoloObjectDetector::~YoloObjectDetector()
 {
   {
     std::unique_lock<std::shared_mutex> lockNodeStatus(mutexNodeStatus_);
     isNodeRunning_ = false;
   }
-  yoloThread_.join();
+  yoloThread_.join(); // スレッドの処理が終わるまで待つ
 }
 
+// メンバ変数にパラメータを登録している
 bool YoloObjectDetector::readParameters()
 {
   // Load common parameters.
@@ -126,22 +134,23 @@ void YoloObjectDetector::init()
   get_parameter("weights_path", weightsPath);
   weightsPath += "/" + weightsModel;
   weights = new char[weightsPath.length() + 1];
-  strcpy(weights, weightsPath.c_str());
+  strcpy(weights, weightsPath.c_str());// weightsがあるパスをweightsにコピー
 
   // Path to config file.
   get_parameter("yolo_model.config_file.name", configModel);
   get_parameter("config_path", configPath);
   configPath += "/" + configModel;
   cfg = new char[configPath.length() + 1];
-  strcpy(cfg, configPath.c_str());
+  strcpy(cfg, configPath.c_str());// .cfgファイルがあるパスをcfgにコピー
 
   // Path to data folder.
   dataPath = darknetFilePath_;
   dataPath += "/data";
   data = new char[dataPath.length() + 1];
-  strcpy(data, dataPath.c_str());
+  strcpy(data, dataPath.c_str());// 
 
   // Get classes.
+  // 認識したいものの名前をdetectionNamesに格納する、numClassesは認識したいものの数
   detectionNames = (char**) realloc((void*) detectionNames, (numClasses_ + 1) * sizeof(char*));
   for (int i = 0; i < numClasses_; i++) {
     detectionNames[i] = new char[classLabels_[i].length() + 1];
@@ -149,9 +158,9 @@ void YoloObjectDetector::init()
   }
 
   // Load network.
-  setupNetwork(cfg, weights, data, thresh, detectionNames, numClasses_,
-                0, 0, 1, 0.5, 0, 0, 0, 0);
-  yoloThread_ = std::thread(&YoloObjectDetector::yolo, this);
+  setupNetwork(cfg, weights, data, thresh, detectionNames, numClasses_, 0, 0, 1, 0.5, 0, 0, 0, 0);
+  // yolo関数を別のスレッドで実行
+  yoloThread_ = std::thread(&YoloObjectDetector::yolo, this); // thisはyolo関数の引数
 
   // Initialize publisher and subscriber.
   std::string cameraTopicName;
@@ -180,35 +189,43 @@ void YoloObjectDetector::init()
 
   it_ = std::make_shared<image_transport::ImageTransport>(shared_from_this());
   
+  // カメラから送られてくるトピックを受け取るsubscriber、コールバック関数はトピックを受け取ったときに処理される関数
   using std::placeholders::_1;
-  imageSubscriber_ = it_->subscribe(cameraTopicName, cameraQueueSize,
-    std::bind(&YoloObjectDetector::cameraCallback, this, _1));
+  imageSubscriber_ = it_->subscribe(cameraTopicName, cameraQueueSize, std::bind(&YoloObjectDetector::cameraCallback, this, _1));
 
-  rclcpp::QoS object_publisher_qos(objectDetectorQueueSize);
+  // 
+  rclcpp::QoS object_publisher_qos(objectDetectorQueueSize);// 通信の品質を保つためのなにか、
   if (objectDetectorLatch) {
     object_publisher_qos.transient_local();
   }
-  objectPublisher_ = this->create_publisher<darknet_ros_msgs::msg::ObjectCount>(
-    objectDetectorTopicName, object_publisher_qos);
-    
+  // 
+  objectPublisher_ = this->create_publisher<darknet_ros_msgs::msg::ObjectCount>(objectDetectorTopicName, object_publisher_qos);
+
   rclcpp::QoS bounding_boxes_publisher_qos(boundingBoxesQueueSize);
   if (boundingBoxesLatch) {
     bounding_boxes_publisher_qos.transient_local();
   }
-  boundingBoxesPublisher_ = this->create_publisher<darknet_ros_msgs::msg::BoundingBoxes>(
-      boundingBoxesTopicName, bounding_boxes_publisher_qos);
+  // 多分認識したtrafic lightのbounding boxを送る
+  boundingBoxesPublisher_ = this->create_publisher<darknet_ros_msgs::msg::BoundingBoxes>(boundingBoxesTopicName, bounding_boxes_publisher_qos);
 
   rclcpp::QoS detection_image_publisher_qos(detectionImageQueueSize);
   if (detectionImageLatch) {
     detection_image_publisher_qos.transient_local();
   }
-  detectionImagePublisher_ = this->create_publisher<sensor_msgs::msg::Image>(
-    detectionImageTopicName, detection_image_publisher_qos);
+  // 画像を送るpublisher
+  detectionImagePublisher_ = this->create_publisher<sensor_msgs::msg::Image>(detectionImageTopicName, detection_image_publisher_qos);
+
+  // mno
+  rclcpp::QoS mno_publisher_qos(1);
+  mno_publisher_qos.transient_local();
+  // 画像を送るpublisher
+  mnoPublisher_ = this->create_publisher<darknet_ros_msgs::msg::Mno>(std::string("mno_topic"), mno_publisher_qos);
 
   // Action servers.
   std::string checkForObjectsActionName;
   get_parameter("actions.camera_reading.topic", checkForObjectsActionName);
 
+  // clientから送られてきたメッセージに対して処理を行うserverを定義、下の関数はメッセージが送られてきたら処理して返り値を返す関数
   using std::placeholders::_2;
   this->checkForObjectsActionServer_ = rclcpp_action::create_server<CheckForObjectsAction>(
     this->get_node_base_interface(),
@@ -221,6 +238,7 @@ void YoloObjectDetector::init()
     std::bind(&YoloObjectDetector::checkForObjectsActionAcceptedCB, this, _1));
 }
 
+// cameraのトピックをsubscribeしたときのcallback関数
 void YoloObjectDetector::cameraCallback(const sensor_msgs::msg::Image::ConstSharedPtr & msg)
 {
   RCLCPP_DEBUG(get_logger(), "[YoloObjectDetector] USB image received.");
@@ -238,6 +256,7 @@ void YoloObjectDetector::cameraCallback(const sensor_msgs::msg::Image::ConstShar
     {
       std::unique_lock<std::shared_mutex> lockImageCallback(mutexImageCallback_);
       imageHeader_ = msg->header;
+      // ここに画像の行列が来る
       camImageCopy_ = cam_image->image.clone();
     }
     {
@@ -247,6 +266,8 @@ void YoloObjectDetector::cameraCallback(const sensor_msgs::msg::Image::ConstShar
     frameWidth_ = cam_image->image.size().width;
     frameHeight_ = cam_image->image.size().height;
   }
+
+  
   return;
 }
 
@@ -312,8 +333,7 @@ bool YoloObjectDetector::isCheckingForObjects() const
 
 bool YoloObjectDetector::publishDetectionImage(const cv::Mat& detectionImage)
 {
-  if (detectionImagePublisher_->get_subscription_count() < 1)
-    return false;
+  if (detectionImagePublisher_->get_subscription_count() < 1) return false;
   cv_bridge::CvImage cvImage;
   cvImage.header.stamp = this->now();
   cvImage.header.frame_id = "detection_image";
@@ -321,6 +341,26 @@ bool YoloObjectDetector::publishDetectionImage(const cv::Mat& detectionImage)
   cvImage.image = detectionImage;
   detectionImagePublisher_->publish(*cvImage.toImageMsg());
   RCLCPP_DEBUG(get_logger(), "Detection image has been published.");
+  return true;
+}
+
+bool YoloObjectDetector::publishMnoMsg(const cv::Mat& detectionImage, darknet_ros_msgs::msg::BoundingBoxes boundingBoxesMsg, bool isDetected)
+{
+  if (mnoPublisher_->get_subscription_count() < 1) return false;
+  darknet_ros_msgs::msg::Mno mnoMsg;
+  mnoMsg.header.stamp = this->now();
+  mnoMsg.header.frame_id = "mno_msg";
+
+  cv_bridge::CvImage cvImage;
+  cvImage.header.stamp = this->now();
+  cvImage.header.frame_id = "detection_image";
+  cvImage.encoding = "bgr8";
+  cvImage.image = detectionImage;
+  mnoMsg.image = *cvImage.toImageMsg();
+  mnoMsg.bounding_boxes = boundingBoxesMsg;
+  mnoMsg.is_detected = isDetected;
+  mnoPublisher_->publish(mnoMsg);
+  RCLCPP_DEBUG(get_logger(), "mno msg has been published.");
   return true;
 }
 
@@ -594,6 +634,7 @@ void YoloObjectDetector::yolo()
   buffLetter_[2] = letterbox_image(buff_[0], net_->w, net_->h);
   // buff_[0] = mat_to_image(imageAndHeader.image);
   disp_ = image_to_mat(buff_[0]);
+  mno_disp = image_to_mat(buff_[0]);
 
   int count = 0;
   if (!demoPrefix_ && viewImage_) {
@@ -628,11 +669,9 @@ void YoloObjectDetector::yolo()
       ss_fps << "MAX:" << max_fps << " MIN:" << min_fps;
 
       demoTime_ = what_time_is_it_now();
-      if (viewImage_) {
-        displayInThread(0);
-      } else {
-        generate_image_cp(buff_[(buffIndex_ + 1)%3], disp_);
-      }
+      displayInThread(0);
+      generate_image_cp(buff_[(buffIndex_ + 1)%3], disp_);
+
       publishInThread();
     } else {
       char name[256];
@@ -675,7 +714,7 @@ void *YoloObjectDetector::publishInThread()
   }
 
   // Publish bounding boxes and detection result.
-  int num = roiBoxes_[0].num;
+  int num = roiBoxes_[0].num; // 信号の部分, wとhの範囲でカラーフィルターかける
   if (num > 0 && num <= 100) {
     for (int i = 0; i < num; i++) {
       for (int j = 0; j < numClasses_; j++) {
@@ -717,12 +756,20 @@ void *YoloObjectDetector::publishInThread()
     boundingBoxesResults_.header.frame_id = "detection";
     boundingBoxesResults_.image_header = headerBuff_[(buffIndex_ + 1) % 3];
     boundingBoxesPublisher_->publish(boundingBoxesResults_);
+    if (!publishMnoMsg(cv::Mat(cvImage), boundingBoxesResults_, true)) {
+      RCLCPP_DEBUG(get_logger(), "mno msg has not been broadcasted.");
+    }
   } else {
     darknet_ros_msgs::msg::ObjectCount msg;
     msg.header.stamp = this->now();
     msg.header.frame_id = "detection";
     msg.count = 0;
     objectPublisher_->publish(msg);
+
+    darknet_ros_msgs::msg::BoundingBoxes empty_boxes;
+    if (!publishMnoMsg(cv::Mat(cvImage), empty_boxes, false)) {
+      RCLCPP_DEBUG(get_logger(), "mno msg has not been broadcasted.");
+    }
   }
   if (isCheckingForObjects()) {
     RCLCPP_DEBUG(get_logger(), "[YoloObjectDetector] check for objects in image.");
@@ -756,5 +803,4 @@ void YoloObjectDetector::generate_image_cp(image p, cv::Mat& disp) {
     }
   }
 }
-
 } /* namespace darknet_ros*/

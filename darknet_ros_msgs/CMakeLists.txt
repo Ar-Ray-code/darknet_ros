@@ -15,6 +15,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/BoundingBox.msg"
   "msg/BoundingBoxes.msg"
   "msg/ObjectCount.msg"
+  "msg/Mno.msg"
   "action/CheckForObjects.action"
   DEPENDENCIES builtin_interfaces action_msgs geometry_msgs sensor_msgs std_msgs 
 )

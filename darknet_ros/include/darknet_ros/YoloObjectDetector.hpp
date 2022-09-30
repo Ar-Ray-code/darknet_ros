@@ -27,7 +27,7 @@
 #include "std_msgs/msg/header.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "geometry_msgs/msg/point.hpp"
-#include "image_transport/image_transport.h"
+#include "image_transport/image_transport.hpp"
 
 // OpenCv
 #include <opencv2/imgproc/imgproc.hpp>
@@ -37,6 +37,7 @@
 
 // darknet_ros_msgs
 #include "darknet_ros_msgs/msg/bounding_boxes.hpp"
+#include "darknet_ros_msgs/msg/mno.hpp"
 #include "darknet_ros_msgs/msg/bounding_box.hpp"
 #include "darknet_ros_msgs/msg/object_count.hpp"
 #include "darknet_ros_msgs/action/check_for_objects.hpp"
@@ -159,6 +160,8 @@ class YoloObjectDetector : public rclcpp::Node
    */
   bool publishDetectionImage(const cv::Mat& detectionImage);
 
+  bool publishMnoMsg(const cv::Mat& detectionImage, darknet_ros_msgs::msg::BoundingBoxes boundingBoxesMsg, bool isDetected);
+
   //! Class labels.
   int numClasses_;
   std::vector<std::string> classLabels_;
@@ -176,6 +179,7 @@ class YoloObjectDetector : public rclcpp::Node
   image_transport::Subscriber imageSubscriber_;
   rclcpp::Publisher<darknet_ros_msgs::msg::ObjectCount>::SharedPtr objectPublisher_;
   rclcpp::Publisher<darknet_ros_msgs::msg::BoundingBoxes>::SharedPtr boundingBoxesPublisher_;
+  rclcpp::Publisher<darknet_ros_msgs::msg::Mno>::SharedPtr mnoPublisher_;
 
   //! Detected objects.
   std::vector<std::vector<RosBox_> > rosBoxes_;
@@ -207,6 +211,7 @@ class YoloObjectDetector : public rclcpp::Node
   int buffIndex_ = 0;
   // IplImage * ipl_;
   cv::Mat disp_;
+  cv::Mat mno_disp;
   float fps_ = 0;
   float max_fps = 0;
   float min_fps = 10000;
